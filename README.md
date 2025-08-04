@@ -1,5 +1,5 @@
-.[!NOTE].
-Proyecto personal a medio/largo plazo
+> .[!NOTE].
+> Proyecto personal a medio/largo plazo
 
 # Comparador de Precios de Perfumes
 
