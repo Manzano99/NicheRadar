@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from models.perfume import Perfume
 from scrapers.notino_scraper import scrape_notino
 
@@ -26,5 +26,8 @@ def get_perfumes():
     ]
     
 @router.get("/scrape/notino")
-def get_perfumes_from_notino():
-    return scrape_notino()
+def get_perfumes_from_notino(
+    limit: int = Query(5, ge=1, le=50),
+    country: str = Query("es", min_length=2, max_length=3),
+):
+    return scrape_notino(limit=limit, country=country)
