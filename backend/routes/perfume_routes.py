@@ -26,5 +26,5 @@ def get_perfumes():
     ]
     
 @router.get("/scrape/notino")
-def get_notino_perfumes():
+def get_perfumes_from_notino():
     return scrape_notino()
