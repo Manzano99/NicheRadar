@@ -1,6 +1,3 @@
-> .[!NOTE].
-> Proyecto personal a medio/largo plazo
-
 # Comparador de Precios de Perfumes
 
 Proyecto para comparar precios de perfumes en diferentes tiendas online.  
