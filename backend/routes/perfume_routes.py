@@ -1,0 +1,30 @@
+from fastapi import APIRouter
+from models.perfume import Perfume
+from scrapers.notino_scraper import scrape_notino
+
+router = APIRouter(prefix="/api", tags=["Perfumes"])
+
+@router.get("/ping")
+def ping():
+    return {"message": "pong - NicheRadar está vivo"}
+
+@router.get("/perfumes", response_model=list[Perfume])
+def get_perfumes():
+    return [
+        Perfume(
+            name="Oud for Greatness",
+            brand="Initio",
+            price=245.00,
+            url="https://example.com/oud-for-greatness"
+        ),
+        Perfume(
+            name="Herod",
+            brand="Parfums de Marly",
+            price=180.00,
+            url="https://example.com/herod"
+        )
+    ]
+    
+@router.get("/scrape/notino")
+def get_notino_perfumes():
+    return scrape_notino()
