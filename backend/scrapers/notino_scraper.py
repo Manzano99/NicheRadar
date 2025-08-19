@@ -5,6 +5,8 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -26,6 +28,31 @@ class PerfumeItem:
 
 PRICE_RE = re.compile(r"(\d+[.,]?\d*)")
 CURRENCY_RE = re.compile(r"(€|EUR|£|GBP|Kč|PLN|RON|lei|Ft|HUF|zł|CZK)")
+
+try:
+    # urllib3 v2+
+    from urllib3.util.retry import Retry
+    RETRY_KW = {"allowed_methods": {"GET"}}
+except Exception:
+    # compatibilidad con urllib3<2
+    from urllib3.util import Retry
+    RETRY_KW = {"method_whitelist": frozenset({"GET"})}
+
+def _build_session() -> requests.Session:
+    """
+    Crea una sesión requests con retries/backoff y headers de navegador.
+    """
+    s = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.7,
+        status_forcelist=[429, 500, 502, 503, 504],
+        **RETRY_KW,
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    s.mount("http://", HTTPAdapter(max_retries=retries))
+    s.headers.update(DEFAULT_HEADERS)
+    return s
 
 def _clean_text(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
@@ -164,3 +191,90 @@ def scrape_notino(limit: int = 5, country: str = "es", pause_s: float = 0.0) -> 
         time.sleep(pause_s)
 
     return [asdict(i) for i in items]
+
+def _is_notino_url(url: str, country: str | None = None) -> bool:
+    try:
+        host = urlparse(url).netloc.lower()
+        if not host.endswith("notino.es") and not host.endswith("notino.fr") and not host.endswith("notino.de") and not host.endswith("notino.it"):
+            return False
+        if country:
+            return host.endswith(f"notino.{country}")
+        return True
+    except Exception:
+        return False
+
+def scrape_notino_product(url: str, country: str | None = None) -> dict:
+    """
+    Raspa una página de producto concreta en Notino y devuelve {source,name,price,currency,url,image}.
+    """
+    if not _is_notino_url(url, country):
+        raise ValueError("URL no válida para Notino o país no coincide")
+
+    s = _build_session()
+    # pre-hit home para cookies si tenemos country deducible
+    if country:
+        base = f"https://www.notino.{country}/"
+        resp_home = s.get(base, timeout=15)
+        resp_home.raise_for_status()
+
+    # obtener la página de producto
+    resp = s.get(url, headers={"Referer": url}, timeout=15)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # NAME (título H1 o variantes)
+    name = None
+    for sel in ["h1.product__title", "h1", ".pd-header__title", ".product-name", "meta[property='og:title']"]:
+        el = soup.select_one(sel)
+        if el:
+            name = _clean_text(el.get("content") or el.get_text())
+            if name:
+                break
+
+    # PRICE (busca en bloques de precio y metas)
+    price_text = ""
+    for sel in [".price .actual", ".price__main", ".price b", ".product-price", "meta[itemprop='price']"]:
+        el = soup.select_one(sel)
+        if el:
+            price_text = el.get("content") or el.get_text()
+            if price_text:
+                break
+    price, currency = _parse_price(price_text)
+
+    # IMAGE (og:image o img principal)
+    image = None
+    for sel in ["meta[property='og:image']", ".product__img img", ".pd-gallery__image img", "img"]:
+        el = soup.select_one(sel)
+        if el:
+            image = el.get("content") or el.get("src") or el.get("data-src")
+            if image:
+                if image.startswith("//"): image = "https:" + image
+                break
+
+    if not name or price is None:
+        # intenta leer data-json embebido (simplificado)
+        for script in soup.find_all("script"):
+            t = script.string or ""
+            if t and "price" in t and "name" in t:
+                m_name = re.search(r'"name"\s*:\s*"([^"]+)"', t)
+                m_price = re.search(r'"price"\s*:\s*"?(?P<p>\d+[.,]?\d*)"?', t)
+                m_curr  = re.search(r'"priceCurrency"\s*:\s*"([^"]+)"', t)
+                if not name and m_name: name = _clean_text(m_name.group(1))
+                if price is None and m_price:
+                    price = float(m_price.group("p").replace(".", "").replace(",", "."))
+                if not currency and m_curr: currency = m_curr.group(1)
+                if name and price is not None:
+                    break
+
+    if not name or price is None:
+        raise RuntimeError("No se pudo extraer name/price en la página de producto.")
+
+    return {
+        "source": "notino",
+        "name": name,
+        "price": float(price),
+        "currency": currency or "€",
+        "url": url,
+        "image": image,
+    }
