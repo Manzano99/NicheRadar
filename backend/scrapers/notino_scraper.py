@@ -15,6 +15,10 @@ DEFAULT_HEADERS = {
         "Chrome/124.0 Safari/537.36"
     ),
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+    "Connection": "keep-alive",
 }
 
 @dataclass
@@ -165,28 +169,35 @@ def _extract_items(soup: BeautifulSoup, limit: int = 5) -> List[PerfumeItem]:
     return []
 
 def scrape_notino(limit: int = 5, country: str = "es", pause_s: float = 0.0) -> List[dict]:
-    """
-    Raspa el listado principal de perfumes en Notino para el país dado.
-    country: 'es', 'fr', 'de', etc. (controla el dominio y moneda).
-    """
     base = f"https://www.notino.{country}"
-    # Página de perfumes genérica; puedes cambiar a una subcategoría si lo prefieres
-    url = f"{base}/perfumes/"
-    resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=15)
+    list_url = f"{base}/perfumes/"
+    alt_url  = f"{base}/bestsellers/perfumes/"
+
+    s = _build_session()
+
+    # 1) Visita previa a la home para obtener cookies
+    resp_home = s.get(base + "/", timeout=15)
+    resp_home.raise_for_status()
+    if pause_s:
+        time.sleep(min(pause_s, 1.0))
+
+    # 2) Pide el listado con Referer
+    resp = s.get(list_url, headers={"Referer": base + "/"}, timeout=15)
+    if resp.status_code == 403:
+        # Fallback directo a bestsellers si lista principal está bloqueada
+        resp = s.get(alt_url, headers={"Referer": base + "/"}, timeout=15)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
     items = _extract_items(soup, limit=limit)
 
-    # Fallback simple: intenta una página de “marcas populares” si no hubo resultados
-    if not items:
-        alt_url = f"{base}/bestsellers/perfumes/"
-        alt = requests.get(alt_url, headers=DEFAULT_HEADERS, timeout=15)
+    # Intento extra si aún no hay items
+    if not items and resp.url != alt_url:
+        alt = s.get(alt_url, headers={"Referer": base + "/"}, timeout=15)
         if alt.ok:
             soup2 = BeautifulSoup(alt.text, "html.parser")
             items = _extract_items(soup2, limit=limit)
 
-    # Pausa opcional para ser amable con el sitio (si añades más páginas)
     if pause_s:
         time.sleep(pause_s)
 
@@ -204,20 +215,25 @@ def _is_notino_url(url: str, country: str | None = None) -> bool:
         return False
 
 def scrape_notino_product(url: str, country: str | None = None) -> dict:
-    """
-    Raspa una página de producto concreta en Notino y devuelve {source,name,price,currency,url,image}.
-    """
+    if country is None:
+        host = urlparse(url).netloc.lower()
+        # extrae sufijo del host: notino.es/.fr/.de/.it
+        if host.endswith(".es"): country = "es"
+        elif host.endswith(".fr"): country = "fr"
+        elif host.endswith(".de"): country = "de"
+        elif host.endswith(".it"): country = "it"
+
     if not _is_notino_url(url, country):
         raise ValueError("URL no válida para Notino o país no coincide")
 
     s = _build_session()
-    # pre-hit home para cookies si tenemos country deducible
+
+    # pre-hit según country deducido
     if country:
         base = f"https://www.notino.{country}/"
-        resp_home = s.get(base, timeout=15)
-        resp_home.raise_for_status()
+        h = s.get(base, timeout=15)
+        h.raise_for_status()
 
-    # obtener la página de producto
     resp = s.get(url, headers={"Referer": url}, timeout=15)
     resp.raise_for_status()
 
