@@ -1,33 +1,38 @@
-from fastapi import APIRouter, Query
-from models.perfume import Perfume
-from scrapers.notino_scraper import scrape_notino
+from fastapi import APIRouter, Query, HTTPException
+import requests
+from models.scraped_item import ScrapedItem
+from scrapers.notino_scraper import scrape_notino, scrape_notino_product
 
 router = APIRouter(prefix="/api", tags=["Perfumes"])
 
-@router.get("/ping")
-def ping():
-    return {"message": "pong - NicheRadar está vivo"}
-
-@router.get("/perfumes", response_model=list[Perfume])
-def get_perfumes():
-    return [
-        Perfume(
-            name="Oud for Greatness",
-            brand="Initio",
-            price=245.00,
-            url="https://example.com/oud-for-greatness"
-        ),
-        Perfume(
-            name="Herod",
-            brand="Parfums de Marly",
-            price=180.00,
-            url="https://example.com/herod"
-        )
-    ]
-    
-@router.get("/scrape/notino")
-def get_perfumes_from_notino(
+@router.get("/scrape/notino", response_model=list[ScrapedItem])
+def scrape_notino_list(
     limit: int = Query(5, ge=1, le=50),
     country: str = Query("es", min_length=2, max_length=3),
 ):
-    return scrape_notino(limit=limit, country=country)
+    try:
+        items = scrape_notino(limit=limit, country=country, pause_s=0.4)
+        if not items:
+            raise HTTPException(status_code=204, detail="Sin resultados (posible bloqueo o cambios de markup).")
+        return items
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 502
+        raise HTTPException(status_code=status, detail=f"Notino respondió {status}. Prueba otro país o más tarde.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/scrape/notino/product", response_model=ScrapedItem)
+def scrape_notino_product_route(
+    url: str = Query(..., description="URL completa del producto en Notino"),
+    country: str | None = Query(None, description="Opcional: es, fr, de, it"),
+):
+    try:
+        item = scrape_notino_product(url=url, country=country)
+        return item
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 502
+        raise HTTPException(status_code=status, detail=f"Notino respondió {status} al consultar el producto.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
